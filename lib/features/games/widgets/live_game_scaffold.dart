@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/constants/app_spacing.dart';
+import '../../../core/feedback/game_feedback.dart';
+import '../../../core/feedback/keep_screen_on.dart';
 import '../../../core/router/app_routes.dart';
 import '../../../core/widgets/live_game_top_bar.dart';
 import '../providers/match_result_provider.dart';
@@ -31,26 +33,28 @@ class LiveGameScaffold extends StatelessWidget {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) exitMatchWithConfirmation(context);
       },
-      child: Scaffold(
-        appBar: const LiveGameTopBar(),
-        body: _constrained(
-          ListView(
-            padding: const EdgeInsets.fromLTRB(AppSpacing.margin, AppSpacing.sm,
-                AppSpacing.margin, AppSpacing.lg),
-            children: children,
+      child: KeepScreenOn(
+        child: Scaffold(
+          appBar: const LiveGameTopBar(),
+          body: _constrained(
+            ListView(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.margin,
+                  AppSpacing.sm, AppSpacing.margin, AppSpacing.lg),
+              children: children,
+            ),
           ),
-        ),
-        bottomNavigationBar: bottom == null
-            ? null
-            : SafeArea(
-                child: _constrained(
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.margin, 0, AppSpacing.margin, AppSpacing.md),
-                    child: bottom,
+          bottomNavigationBar: bottom == null
+              ? null
+              : SafeArea(
+                  child: _constrained(
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(AppSpacing.margin, 0,
+                          AppSpacing.margin, AppSpacing.md),
+                      child: bottom,
+                    ),
                   ),
                 ),
-              ),
+        ),
       ),
     );
   }
@@ -71,6 +75,7 @@ class LiveGameScaffold extends StatelessWidget {
 /// Se usa `go` (no `push`): la partida terminada no debe quedar en el
 /// historial para que "atrás" no regrese a ella.
 void finishMatch(BuildContext context, WidgetRef ref, MatchResult result) {
+  ref.read(gameFeedbackProvider).both(GameSound.win, Haptic.heavy);
   ref.read(lastMatchResultProvider.notifier).save(result);
   context.go(AppRoutes.results);
 }
