@@ -106,9 +106,13 @@ class _CharadesPlayScreenState extends ConsumerState<CharadesPlayScreen> {
   @override
   void initState() {
     super.initState();
-    // Con el móvil boca abajo/arriba el sistema giraría la pantalla a mitad
-    // de carta: durante la partida se fija en vertical.
-    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    // Se permite horizontal (lo natural con el móvil en la frente). Se excluye
+    // "vertical invertido" para que inclinar la pantalla no la dé la vuelta.
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
   }
 
   @override
@@ -834,6 +838,43 @@ class _WordCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+
+    // En horizontal la altura es poca: solo etiquetas + palabra + pista, para
+    // que la palabra se lea sin desplazar.
+    if (MediaQuery.orientationOf(context) == Orientation.landscape) {
+      return ChunkyCard(
+        child: Column(
+          children: [
+            Text(
+              '${card.category} · '
+              '${plural(card.difficulty.points, 'punto', 'puntos')}',
+              textAlign: TextAlign.center,
+              style: textTheme.labelMedium
+                  ?.copyWith(color: AppColors.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: FittedBox(
+                key: ValueKey('charades-word-${card.word}'),
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  card.word,
+                  textAlign: TextAlign.center,
+                  style: textTheme.displayLarge,
+                ),
+              ),
+            ),
+            Text(
+              card.hint,
+              textAlign: TextAlign.center,
+              style: AppTheme.withWeight(textTheme.bodyMedium!, FontWeight.w500)
+                  .copyWith(color: AppColors.onSurfaceVariant),
+            ),
+          ],
+        ),
+      );
+    }
 
     return ChunkyCard(
       child: ConstrainedBox(
