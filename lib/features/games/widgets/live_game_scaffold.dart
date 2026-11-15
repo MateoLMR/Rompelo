@@ -17,12 +17,22 @@ class LiveGameScaffold extends StatelessWidget {
     super.key,
     required this.children,
     this.bottom,
+    this.fill = false,
+    this.maxWidth = AppSpacing.maxContentWidth,
   });
 
   final List<Widget> children;
 
   /// Botones que quedan fijos abajo (DESIGN.md › Vertical Rhythm).
   final Widget? bottom;
+
+  /// `true`: los [children] van en una columna que ocupa todo el alto (sin
+  /// desplazamiento) y pueden usar `Expanded`. Para pantallas que deben
+  /// verse completas de un vistazo, como Charadas en horizontal.
+  final bool fill;
+
+  /// Ancho máximo del contenido (540 en vertical; más en horizontal).
+  final double maxWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -36,17 +46,38 @@ class LiveGameScaffold extends StatelessWidget {
       child: KeepScreenOn(
         child: Scaffold(
           appBar: const LiveGameTopBar(),
-          body: _constrained(
-            ListView(
-              padding: const EdgeInsets.fromLTRB(AppSpacing.margin,
-                  AppSpacing.sm, AppSpacing.margin, AppSpacing.lg),
-              children: children,
-            ),
+          // SafeArea lateral: en horizontal el notch queda a un costado.
+          body: SafeArea(
+            top: false,
+            bottom: fill && bottom == null,
+            child: fill
+                ? Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: maxWidth),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(AppSpacing.margin,
+                            AppSpacing.sm, AppSpacing.margin, AppSpacing.sm),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: children,
+                        ),
+                      ),
+                    ),
+                  )
+                : _constrained(
+                    maxWidth,
+                    ListView(
+                      padding: const EdgeInsets.fromLTRB(AppSpacing.margin,
+                          AppSpacing.sm, AppSpacing.margin, AppSpacing.lg),
+                      children: children,
+                    ),
+                  ),
           ),
           bottomNavigationBar: bottom == null
               ? null
               : SafeArea(
                   child: _constrained(
+                    maxWidth,
                     Padding(
                       padding: const EdgeInsets.fromLTRB(AppSpacing.margin, 0,
                           AppSpacing.margin, AppSpacing.md),
@@ -59,12 +90,11 @@ class LiveGameScaffold extends StatelessWidget {
     );
   }
 
-  /// Centra y limita a 540 px (modo tablet / mesa).
-  static Widget _constrained(Widget child) => Center(
+  /// Centra y limita el ancho (540 px por defecto: modo tablet / mesa).
+  static Widget _constrained(double maxWidth, Widget child) => Center(
         heightFactor: 1,
         child: ConstrainedBox(
-          constraints:
-              const BoxConstraints(maxWidth: AppSpacing.maxContentWidth),
+          constraints: BoxConstraints(maxWidth: maxWidth),
           child: child,
         ),
       );

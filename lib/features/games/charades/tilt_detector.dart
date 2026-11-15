@@ -29,23 +29,38 @@ enum TiltGesture {
 /// fuerza del movimiento, solo de la inclinación. Además:
 ///
 /// - Un filtro paso bajo suaviza los picos de aceleración.
+/// - **Calibración:** nadie se pone el móvil perfectamente vertical. La
+///   posición "en la frente" se toma como referencia (base) cuando el móvil
+///   se queda quieto cerca de la vertical ([armDegrees] durante [armTime]),
+///   y los gestos se miden respecto a ella. La base sigue despacio los
+///   pequeños cambios de postura mientras está en neutro.
 /// - El ángulo tiene que mantenerse pasado el umbral [holdTime] para contar.
-/// - Tras un gesto hay que volver a neutro (|ángulo| < [neutralDegrees]) para
+/// - Tras un gesto hay que volver cerca de la base (< [neutralDegrees]) para
 ///   que cuente el siguiente.
 class TiltGestureRecognizer {
   TiltGestureRecognizer({
-    this.triggerDegrees = 50,
-    this.neutralDegrees = 25,
-    this.holdTime = const Duration(milliseconds: 120),
-    this.cooldown = const Duration(milliseconds: 600),
-    this.smoothing = 0.25,
+    this.triggerDegrees = 30,
+    this.neutralDegrees = 15,
+    this.armDegrees = 25,
+    this.armTime = const Duration(milliseconds: 250),
+    this.holdTime = const Duration(milliseconds: 80),
+    this.cooldown = const Duration(milliseconds: 500),
+    this.smoothing = 0.3,
   });
 
-  /// Inclinación necesaria para disparar el gesto.
+  /// Inclinación (respecto a la base) necesaria para disparar el gesto.
   final double triggerDegrees;
 
-  /// Por debajo de esta inclinación se considera "en la frente".
+  /// Distancia a la base por debajo de la cual se considera "en la frente".
   final double neutralDegrees;
+
+  /// Para fijar la base al empezar, el móvil debe estar a menos de esto de
+  /// la vertical. Es menor que [triggerDegrees]: así acomodarse el móvil en
+  /// la frente nunca dispara un gesto.
+  final double armDegrees;
+
+  /// Tiempo que el móvil debe quedarse quieto para fijar la base.
+  final Duration armTime;
 
   /// Tiempo que hay que sostener la inclinación.
   final Duration holdTime;
@@ -58,12 +73,18 @@ class TiltGestureRecognizer {
 
   double? _x, _y, _z;
 
-  /// `false` hasta que el móvil pasa por neutro. Empieza en `false`: el turno
-  /// arranca con el móvil en la mano, no en la frente.
+  /// Ángulo de referencia "en la frente"; `null` hasta calibrar.
+  double? _baseline;
+  Duration? _steadySince;
+
+  /// `false` hasta que el móvil vuelve a la base tras un gesto.
   bool _armed = false;
   TiltGesture? _pending;
   Duration? _pendingSince;
   Duration? _lastGesture;
+
+  /// Base actual (grados) o `null` si aún no se calibró.
+  double? get baseline => _baseline;
 
   /// Ángulo actual (grados) tras el filtro; útil para depurar.
   double get angle {
@@ -74,6 +95,8 @@ class TiltGestureRecognizer {
 
   void reset() {
     _x = _y = _z = null;
+    _baseline = null;
+    _steadySince = null;
     _armed = false;
     _pending = null;
     _pendingSince = null;
@@ -93,16 +116,35 @@ class TiltGestureRecognizer {
     }
 
     final a = angle;
-    if (a.abs() < neutralDegrees) {
+
+    // 1) Calibración: esperar al móvil quieto cerca de la vertical.
+    final base = _baseline;
+    if (base == null) {
+      if (a.abs() >= armDegrees) {
+        _steadySince = null;
+        return null;
+      }
+      _steadySince ??= time;
+      if (time - _steadySince! >= armTime) {
+        _baseline = a;
+        _armed = true;
+      }
+      return null;
+    }
+
+    // 2) Neutro: re-armar y seguir despacio la postura.
+    final rel = a - base;
+    if (rel.abs() < neutralDegrees) {
       _armed = true;
       _pending = null;
+      _baseline = base + 0.02 * rel;
       return null;
     }
     if (!_armed) return null;
 
-    final candidate = a <= -triggerDegrees
+    final candidate = rel <= -triggerDegrees
         ? TiltGesture.down
-        : a >= triggerDegrees
+        : rel >= triggerDegrees
             ? TiltGesture.up
             : null;
     if (candidate == null) {

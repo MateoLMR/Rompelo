@@ -192,6 +192,21 @@ void main() {
     expect(sawCustom, isTrue);
   });
 
+  testWidgets('en horizontal todo el turno se ve sin desbordes',
+      (tester) async {
+    await pumpAppAt(tester, '/partida/charadas',
+        prepare: easyCards, size: const Size(2400, 1100));
+
+    expect(find.byKey(const ValueKey('charades-ready-name')), findsOneWidget);
+    await tapKey(tester, 'charades-ready');
+    expect(currentWord(tester), isNotEmpty);
+    await tapKey(tester, 'charades-pass');
+    await tapKey(tester, 'charades-correct');
+    await endTurn(tester);
+    expect(find.text('¡Tiempo!'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('"Salir" pide confirmación y vuelve al home', (tester) async {
     final container = await pumpGame(tester, 'charadas');
     await expectExitWithConfirmation(tester, container);

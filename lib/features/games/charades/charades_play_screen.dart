@@ -106,10 +106,9 @@ class _CharadesPlayScreenState extends ConsumerState<CharadesPlayScreen> {
   @override
   void initState() {
     super.initState();
-    // Se permite horizontal (lo natural con el móvil en la frente). Se excluye
-    // "vertical invertido" para que inclinar la pantalla no la dé la vuelta.
+    // La partida gira sola a horizontal (lo natural con el móvil en la
+    // frente). Los dos lados valen; inclinar la pantalla no la da la vuelta.
     SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
@@ -317,6 +316,33 @@ class _CharadesPlayScreenState extends ConsumerState<CharadesPlayScreen> {
     final timersEnabled = ref.watch(liveTimersEnabledProvider);
     final tiltOn = _setup.tiltControls && ref.watch(tiltSensorEnabledProvider);
     final playing = _phase == CharadesPhase.playing;
+    final landscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+
+    final ribbon = _ScoreRibbon(
+      round: _round,
+      rounds: _setup.rounds,
+      participants: _participants,
+      scores: _scores,
+      current: _current,
+      teams: _setup.mode == CharadesMode.teams,
+      onPause: _pause,
+    );
+    final timer = TimerBar(
+      // Key nueva por turno = State nuevo = reloj desde cero.
+      key: ValueKey('charades-timer-$_turn'),
+      duration: Duration(seconds: _setup.turnSeconds),
+      style: landscape ? TimerBarStyle.compact : TimerBarStyle.card,
+      running: timersEnabled && !_paused,
+      onFinished: _endTurn,
+    );
+
+    final readyButton = ChunkyButton(
+      key: const ValueKey('charades-ready'),
+      label: '¡Estoy listo!',
+      leadingIcon: Icons.play_arrow_rounded,
+      onPressed: _startTurn,
+    );
 
     return TiltDetector(
       enabled: tiltOn && playing && !_paused,
@@ -324,14 +350,49 @@ class _CharadesPlayScreenState extends ConsumerState<CharadesPlayScreen> {
       onUp: () => _onTilt(false),
       child: Stack(
         children: [
-          LiveGameScaffold(
-            bottom: switch (_phase) {
-              CharadesPhase.ready => ChunkyButton(
-                  key: const ValueKey('charades-ready'),
-                  label: '¡Estoy listo!',
-                  leadingIcon: Icons.play_arrow_rounded,
-                  onPressed: _startTurn,
+          if (landscape && playing)
+            // Horizontal en juego: todo cabe sin desplazar. Marcador y reloj
+            // en una fila, la carta ocupa el resto y los botones van al
+            // costado (Pasar arriba / Acierto abajo, como el gesto).
+            LiveGameScaffold(
+              fill: true,
+              maxWidth: 1000,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: ribbon),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(child: timer),
+                  ],
                 ),
+                const SizedBox(height: AppSpacing.sm),
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: _WordCard(card: _card, tilt: tiltOn)),
+                      const SizedBox(width: AppSpacing.sm),
+                      SizedBox(
+                        width: 168,
+                        child: _PlayButtons(
+                          vertical: true,
+                          penaltyOnPass: _setup.penaltyOnPass,
+                          points: _card.difficulty.points,
+                          onPass: _pass,
+                          onCorrect: _correct,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          else
+          LiveGameScaffold(
+            maxWidth: landscape ? 900 : AppSpacing.maxContentWidth,
+            bottom: switch (_phase) {
+              // En horizontal el botón va dentro de la tarjeta.
+              CharadesPhase.ready => landscape ? null : readyButton,
               CharadesPhase.countdown => null,
               CharadesPhase.playing => _PlayButtons(
                   penaltyOnPass: _setup.penaltyOnPass,
@@ -352,15 +413,7 @@ class _CharadesPlayScreenState extends ConsumerState<CharadesPlayScreen> {
                 ),
             },
             children: [
-              _ScoreRibbon(
-                round: _round,
-                rounds: _setup.rounds,
-                participants: _participants,
-                scores: _scores,
-                current: _current,
-                teams: _setup.mode == CharadesMode.teams,
-                onPause: _pause,
-              ),
+              ribbon,
               const SizedBox(height: AppSpacing.sm),
               ...switch (_phase) {
                 CharadesPhase.ready => [
@@ -370,19 +423,14 @@ class _CharadesPlayScreenState extends ConsumerState<CharadesPlayScreen> {
                       teams: _setup.mode == CharadesMode.teams,
                       tilt: tiltOn,
                       seconds: _setup.turnSeconds,
+                      action: landscape ? readyButton : null,
                     ),
                   ],
                 CharadesPhase.countdown => [
                     _CountdownCard(onFinished: _beginPlaying),
                   ],
                 CharadesPhase.playing => [
-                    TimerBar(
-                      // Key nueva por turno = State nuevo = reloj desde cero.
-                      key: ValueKey('charades-timer-$_turn'),
-                      duration: Duration(seconds: _setup.turnSeconds),
-                      running: timersEnabled && !_paused,
-                      onFinished: _endTurn,
-                    ),
+                    timer,
                     const SizedBox(height: AppSpacing.md),
                     _WordCard(card: _card, tilt: tiltOn),
                   ],
@@ -427,6 +475,7 @@ class _ReadyCard extends StatelessWidget {
     required this.teams,
     required this.tilt,
     required this.seconds,
+    this.action,
   });
 
   final String name;
@@ -435,54 +484,88 @@ class _ReadyCard extends StatelessWidget {
   final bool tilt;
   final int seconds;
 
+  /// Botón "¡Estoy listo!" dentro de la tarjeta (solo en horizontal).
+  final Widget? action;
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
 
+    final who = [
+      Container(
+        width: 72,
+        height: 72,
+        decoration: const BoxDecoration(
+          color: AppColors.secondaryFixed,
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.theater_comedy_rounded,
+            size: 40, color: AppColors.secondary),
+      ),
+      const SizedBox(height: AppSpacing.md),
+      Text('Ronda $round · Pasa el teléfono a',
+          textAlign: TextAlign.center,
+          style:
+              textTheme.labelMedium?.copyWith(color: AppColors.onSurfaceVariant)),
+      const SizedBox(height: 4),
+      Text(
+        name,
+        key: const ValueKey('charades-ready-name'),
+        textAlign: TextAlign.center,
+        style: textTheme.displaySmall,
+      ),
+    ];
+    final how = [
+      Text(
+        tilt
+            ? 'Ponte el móvil en la frente con la pantalla hacia '
+                '${teams ? 'tu equipo' : 'el grupo'}. Ellos actúan o dan '
+                'pistas sin decir la palabra.'
+            : '${teams ? 'Un jugador del equipo' : 'Tú'} actúa la palabra '
+                'sin hablar; ${teams ? 'su equipo' : 'el resto'} '
+                'adivina.',
+        textAlign: TextAlign.center,
+        style: textTheme.bodyMedium,
+      ),
+      const SizedBox(height: AppSpacing.md),
+      if (tilt) const _GestureHints(),
+      const SizedBox(height: AppSpacing.sm),
+      Text('Tienen $seconds segundos: ¡todas las cartas que puedan!',
+          textAlign: TextAlign.center,
+          style: textTheme.labelSmall?.copyWith(color: AppColors.secondary)),
+    ];
+
+    // Horizontal: quién juega + botón a la izquierda (sin el icono, para que
+    // quepa sin desplazar), instrucciones a la derecha.
+    if (MediaQuery.orientationOf(context) == Orientation.landscape) {
+      return ChunkyCard(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                children: [
+                  ...who.skip(2),
+                  if (action != null) ...[
+                    const SizedBox(height: AppSpacing.md),
+                    action!,
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(child: Column(children: how)),
+          ],
+        ),
+      );
+    }
+
     return ChunkyCard(
       child: Column(
         children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: const BoxDecoration(
-              color: AppColors.secondaryFixed,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.theater_comedy_rounded,
-                size: 40, color: AppColors.secondary),
-          ),
+          ...who,
           const SizedBox(height: AppSpacing.md),
-          Text('Ronda $round · Pasa el teléfono a',
-              textAlign: TextAlign.center,
-              style: textTheme.labelMedium
-                  ?.copyWith(color: AppColors.onSurfaceVariant)),
-          const SizedBox(height: 4),
-          Text(
-            name,
-            key: const ValueKey('charades-ready-name'),
-            textAlign: TextAlign.center,
-            style: textTheme.displaySmall,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Text(
-            tilt
-                ? 'Ponte el móvil en la frente con la pantalla hacia '
-                    '${teams ? 'tu equipo' : 'el grupo'}. Ellos actúan o dan '
-                    'pistas sin decir la palabra.'
-                : '${teams ? 'Un jugador del equipo' : 'Tú'} actúa la palabra '
-                    'sin hablar; ${teams ? 'su equipo' : 'el resto'} '
-                    'adivina.',
-            textAlign: TextAlign.center,
-            style: textTheme.bodyMedium,
-          ),
-          const SizedBox(height: AppSpacing.md),
-          if (tilt) const _GestureHints(),
-          const SizedBox(height: AppSpacing.sm),
-          Text('Tienen $seconds segundos: ¡todas las cartas que puedan!',
-              textAlign: TextAlign.center,
-              style: textTheme.labelSmall
-                  ?.copyWith(color: AppColors.secondary)),
+          ...how,
         ],
       ),
     );
@@ -498,10 +581,12 @@ class _CountdownCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final landscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
 
     return ChunkyCard(
       child: SizedBox(
-        height: 320,
+        height: landscape ? 180 : 320,
         child: CountdownBuilder(
           duration: const Duration(seconds: 3),
           onFinished: onFinished,
@@ -521,7 +606,8 @@ class _CountdownCard extends StatelessWidget {
                     '$n',
                     key: ValueKey(n),
                     style: textTheme.displayLarge?.copyWith(
-                        fontSize: 120, color: AppColors.secondary),
+                        fontSize: landscape ? 88 : 120,
+                        color: AppColors.secondary),
                   ),
                 ),
               ],
@@ -550,6 +636,45 @@ class _TurnSummary extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final hits = log.where((c) => c.correct).length;
 
+    Widget row(PlayedCard played) => Padding(
+          padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+          child: Row(
+            children: [
+              Icon(
+                played.correct
+                    ? Icons.check_circle_rounded
+                    : Icons.cancel_rounded,
+                color: played.correct
+                    ? const Color(0xFF2E9E5B)
+                    : AppColors.outline,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  played.card.word,
+                  style: textTheme.bodyLarge?.copyWith(
+                    decoration:
+                        played.correct ? null : TextDecoration.lineThrough,
+                    color: played.correct
+                        ? AppColors.onSurface
+                        : AppColors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              Text(
+                played.points > 0 ? '+${played.points}' : '${played.points}',
+                style: AppTheme.tabular(textTheme.labelLarge!),
+              ),
+            ],
+          ),
+        );
+
+    // Horizontal: la lista se reparte en dos columnas para no desplazar tanto.
+    final twoColumns =
+        MediaQuery.orientationOf(context) == Orientation.landscape &&
+            log.length > 1;
+    final half = (log.length + 1) ~/ 2;
+
     return ChunkyCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -568,45 +693,21 @@ class _TurnSummary extends StatelessWidget {
           if (log.isEmpty)
             Text('No se jugó ninguna carta en este turno.',
                 textAlign: TextAlign.center, style: textTheme.bodyMedium)
+          else if (twoColumns)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                    child: Column(
+                        children: [for (final p in log.take(half)) row(p)])),
+                const SizedBox(width: AppSpacing.lg),
+                Expanded(
+                    child: Column(
+                        children: [for (final p in log.skip(half)) row(p)])),
+              ],
+            )
           else
-            for (final played in log)
-              Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                child: Row(
-                  children: [
-                    Icon(
-                      played.correct
-                          ? Icons.check_circle_rounded
-                          : Icons.cancel_rounded,
-                      color: played.correct
-                          ? const Color(0xFF2E9E5B)
-                          : AppColors.outline,
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: Text(
-                        played.card.word,
-                        style: textTheme.bodyLarge?.copyWith(
-                          decoration: played.correct
-                              ? null
-                              : TextDecoration.lineThrough,
-                          color: played.correct
-                              ? AppColors.onSurface
-                              : AppColors.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      played.points > 0
-                          ? '+${played.points}'
-                          : played.points < 0
-                              ? '${played.points}'
-                              : '0',
-                      style: AppTheme.tabular(textTheme.labelLarge!),
-                    ),
-                  ],
-                ),
-              ),
+            for (final played in log) row(played),
         ],
       ),
     );
@@ -620,6 +721,7 @@ class _PlayButtons extends StatelessWidget {
     required this.points,
     required this.onPass,
     required this.onCorrect,
+    this.vertical = false,
   });
 
   final bool penaltyOnPass;
@@ -627,9 +729,16 @@ class _PlayButtons extends StatelessWidget {
   final VoidCallback onPass;
   final VoidCallback onCorrect;
 
+  /// Apilados (Pasar arriba, Acierto abajo) llenando el alto: columna
+  /// lateral de Charadas en horizontal.
+  final bool vertical;
+
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Flex(
+      direction: vertical ? Axis.vertical : Axis.horizontal,
+      crossAxisAlignment:
+          vertical ? CrossAxisAlignment.stretch : CrossAxisAlignment.center,
       children: [
         Expanded(
           child: _ActionTile(
@@ -645,7 +754,7 @@ class _PlayButtons extends StatelessWidget {
             onTap: onPass,
           ),
         ),
-        const SizedBox(width: AppSpacing.sm),
+        const SizedBox(width: AppSpacing.sm, height: AppSpacing.sm),
         Expanded(
           child: _ActionTile(
             key: const ValueKey('charades-correct'),
@@ -695,9 +804,14 @@ class _ScoreRibbon extends StatelessWidget {
     final visible =
         teams ? [for (var i = 0; i < participants.length; i++) i] : [current];
 
+    // En horizontal cada píxel de alto cuenta: franja más baja.
+    final landscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+
     return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+      padding: EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: landscape ? 2 : AppSpacing.sm),
       decoration: const BoxDecoration(
         color: AppColors.surfaceContainerLow,
         borderRadius: BorderRadius.all(Radius.circular(AppRadius.lg)),
@@ -839,35 +953,54 @@ class _WordCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
 
-    // En horizontal la altura es poca: solo etiquetas + palabra + pista, para
-    // que la palabra se lea sin desplazar.
+    // En horizontal la carta llena el alto que le dan (sin desplazar): la
+    // palabra crece todo lo posible para leerse desde lejos y se encoge
+    // sola si es larga o la pantalla es baja.
     if (MediaQuery.orientationOf(context) == Orientation.landscape) {
       return ChunkyCard(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
         child: Column(
           children: [
-            Text(
-              '${card.category} · '
-              '${plural(card.difficulty.points, 'punto', 'puntos')}',
-              textAlign: TextAlign.center,
-              style: textTheme.labelMedium
-                  ?.copyWith(color: AppColors.onSurfaceVariant),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(card.icon, size: 20, color: AppColors.primary),
+                const SizedBox(width: AppSpacing.xs),
+                Flexible(
+                  child: Text(
+                    '${card.category} · '
+                    '${plural(card.difficulty.points, 'punto', 'puntos')}'
+                    ' • ${card.difficulty.label}',
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.labelMedium
+                        ?.copyWith(color: AppColors.onSurfaceVariant),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: AppSpacing.xs),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
-              child: FittedBox(
-                key: ValueKey('charades-word-${card.word}'),
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  card.word,
-                  textAlign: TextAlign.center,
-                  style: textTheme.displayLarge,
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                child: Center(
+                  key: ValueKey('charades-word-${card.word}'),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      card.word,
+                      textAlign: TextAlign.center,
+                      style: textTheme.displayLarge?.copyWith(fontSize: 96),
+                    ),
+                  ),
                 ),
               ),
             ),
             Text(
               card.hint,
               textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: AppTheme.withWeight(textTheme.bodyMedium!, FontWeight.w500)
                   .copyWith(color: AppColors.onSurfaceVariant),
             ),
@@ -1098,6 +1231,8 @@ class _ActionTile extends StatelessWidget {
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            // Centrado cuando el botón ocupa un alto fijo (columna lateral).
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1133,6 +1268,8 @@ class _PauseDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      // En horizontal la altura no alcanza: el diálogo desplaza.
+      scrollable: true,
       icon: const Icon(Icons.pause_circle_rounded, size: 40),
       title: const Text('Partida en pausa'),
       content: const Text(

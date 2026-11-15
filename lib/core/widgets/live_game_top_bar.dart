@@ -113,6 +113,8 @@ Future<void> exitMatchWithConfirmation(BuildContext context) async {
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
+      // En horizontal (Charadas) la altura no alcanza: el diálogo desplaza.
+      scrollable: true,
       icon: const Icon(Icons.logout_rounded, color: AppColors.secondary),
       title: const Text('¿Salir de la partida?'),
       content: const Text(
