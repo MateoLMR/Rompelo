@@ -29,6 +29,22 @@ Future<Set<int>> dealAll(WidgetTester tester, int players) async {
   return impostors;
 }
 
+/// Desde el debate: ir a votar, acusar a [player] y revelar.
+Future<void> vote(WidgetTester tester, int player) async {
+  await tapKey(tester, 'impostor-go-vote');
+  await tapKey(tester, 'suspect-$player');
+  await tapKey(tester, 'impostor-reveal');
+}
+
+/// Con 6 jugadores y 1 impostor: acusa inocentes hasta que queda 1 contra 1
+/// (4 votos) y el impostor escapa.
+Future<void> voteOutInnocents(WidgetTester tester, int impostor) async {
+  for (var k = 1; k <= 4; k++) {
+    await vote(tester, (impostor + k) % 6);
+    if (k < 4) await tapKey(tester, 'impostor-continue');
+  }
+}
+
 /// Puntaje acumulado de [player] en el marcador del veredicto.
 String? scoreText(WidgetTester tester, int player) => tester
     .widget<Text>(find.byKey(ValueKey('impostor-score-$player')))
@@ -178,14 +194,75 @@ void main() {
     expect(scoreText(tester, impostor), '3');
   });
 
-  testWidgets('acusar a un inocente: el impostor escapa con 2 puntos',
+  testWidgets('acusar a un inocente no termina la ronda: queda eliminado',
       (tester) async {
     await pumpGame(tester, 'impostor');
     final impostor = (await dealAll(tester, 6)).single;
     final innocent = (impostor + 1) % 6;
+    await vote(tester, innocent);
+
+    expect(find.text('Ronda 1 · Resultado del voto'), findsOneWidget);
+    expect(find.textContaining('era inocente'), findsOneWidget);
+    expect(find.byKey(const ValueKey('impostor-verdict')), findsNothing);
+
+    // Se vuelve a debatir; en la votación el eliminado no se puede acusar.
+    await tapKey(tester, 'impostor-continue');
+    expect(find.text('Ronda 1 · Debate en vivo'), findsOneWidget);
     await tapKey(tester, 'impostor-go-vote');
+    expect(find.text('Eliminado: era inocente'), findsOneWidget);
+    await tapKey(tester, 'suspect-$innocent');
+    expect(find.text('0/1'), findsOneWidget);
+
+    // Ahora sí atrapan al impostor.
+    await tapKey(tester, 'suspect-$impostor');
+    await tapKey(tester, 'impostor-reveal');
+    expect(find.text('¡Atraparon al impostor!'), findsOneWidget);
+  });
+
+  testWidgets('el debate no le da turno a los eliminados', (tester) async {
+    await pumpGame(tester, 'impostor');
+    final impostor = (await dealAll(tester, 6)).single;
+    final innocent = (impostor + 1) % 6;
+    final innocentName = find.byKey(ValueKey('suspect-$innocent'));
+    await tapKey(tester, 'impostor-go-vote');
+    final name = tester
+        .widgetList<Text>(
+            find.descendant(of: innocentName, matching: find.byType(Text)))
+        .first
+        .data!;
     await tapKey(tester, 'suspect-$innocent');
     await tapKey(tester, 'impostor-reveal');
+    await tapKey(tester, 'impostor-continue');
+
+    for (var i = 0; i < 6; i++) {
+      expect(find.text('Turno de $name'), findsNothing);
+      await tester.tap(find.text('Siguiente turno'));
+      await tester.pumpAndSettle();
+    }
+  });
+
+  testWidgets('con 2 impostores se atrapan de a uno', (tester) async {
+    await pumpGame(
+      tester,
+      'impostor',
+      prepare: (c) => c.read(impostorSetupProvider.notifier).setImpostors(2),
+    );
+    final impostors = (await dealAll(tester, 6)).toList();
+
+    await vote(tester, impostors[0]);
+    expect(find.textContaining('era impostor!'), findsOneWidget);
+    expect(find.textContaining('Aún queda 1 impostor'), findsOneWidget);
+
+    await tapKey(tester, 'impostor-continue');
+    await vote(tester, impostors[1]);
+    expect(find.text('¡Atraparon a los impostores!'), findsOneWidget);
+  });
+
+  testWidgets('si quedan tantos impostores como ciudadanos, escapa con 2',
+      (tester) async {
+    await pumpGame(tester, 'impostor');
+    final impostor = (await dealAll(tester, 6)).single;
+    await voteOutInnocents(tester, impostor);
 
     expect(find.text('¡El impostor escapó!'), findsOneWidget);
     expect(scoreText(tester, impostor), '2');
@@ -198,9 +275,7 @@ void main() {
     for (var round = 1; round <= 2; round++) {
       expect(find.text('Ronda $round · Reparto secreto'), findsOneWidget);
       final impostor = (await dealAll(tester, 6)).single;
-      await tapKey(tester, 'impostor-go-vote');
-      await tapKey(tester, 'suspect-${(impostor + 1) % 6}'); // inocente
-      await tapKey(tester, 'impostor-reveal');
+      await voteOutInnocents(tester, impostor);
       if (round == 1) await tapKey(tester, 'impostor-next-round');
     }
 

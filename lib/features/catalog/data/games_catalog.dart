@@ -66,7 +66,9 @@ const List<GameItem> gamesCatalog = [
           'conoce el tema.',
       'Por turnos, cada uno pregunta o da una pista sobre la palabra sin '
           'decirla.',
-      'Al terminar el debate, voten en voz alta y marquen a quién acusan.',
+      'Al terminar el debate, voten en voz alta y marquen a quién acusan. '
+          'Si es inocente, queda eliminado y siguen debatiendo.',
+      'Los impostores ganan si quedan tantos como ciudadanos.',
       'Si atrapan al impostor, aún puede ganar si adivina la palabra.',
       'Ciudadanos: +1 si ganan. Impostor: +2 si escapa y +3 si adivina. '
           'Jueguen las rondas que quieran.',

@@ -37,6 +37,10 @@ enum ImpostorPhase {
   /// El grupo elige a quién acusa.
   vote,
 
+  /// Resultado de un voto que no cierra la ronda: el acusado era inocente
+  /// (queda eliminado) o era uno de varios impostores. Se vuelve a debatir.
+  voteResult,
+
   /// Atraparon al impostor: puede intentar adivinar la palabra.
   lastChance,
 
@@ -49,6 +53,13 @@ enum ImpostorPhase {
 /// Cada ronda: palabra e impostor(es) al azar → se pasa el celular para que
 /// cada uno vea su rol en secreto → debate por turnos → votación → veredicto.
 /// Se juegan las rondas que el grupo quiera; el marcador final suma todas.
+///
+/// En cada votación se acusa a **una** persona:
+/// - Si es inocente, queda eliminada y se sigue debatiendo sin ella.
+/// - Si es impostor y ya no queda ninguno, tiene la última oportunidad de
+///   adivinar la palabra. Con varios impostores se sigue hasta atraparlos.
+/// - Si los impostores que quedan igualan o superan a los ciudadanos que
+///   quedan, los impostores escapan y ganan la ronda.
 class ImpostorPlayScreen extends ConsumerStatefulWidget {
   const ImpostorPlayScreen({super.key});
 
@@ -87,6 +98,18 @@ class _ImpostorPlayScreenState extends ConsumerState<ImpostorPlayScreen> {
   bool _seenRole = false;
   bool _debateOver = false;
   final Set<int> _accused = {};
+
+  /// Inocentes acusados por error: ya no juegan esta ronda.
+  final Set<int> _eliminated = {};
+
+  /// Impostores ya descubiertos (con varios, se atrapan de a uno).
+  final Set<int> _caughtImpostors = {};
+
+  /// Último acusado (para la tarjeta de [ImpostorPhase.voteResult]).
+  int? _lastAccused;
+
+  /// Votaciones hechas en la ronda: reinicia el reloj de cada debate.
+  int _votes = 0;
   bool _caught = false;
   bool _guessed = false;
   List<int> _roundPoints = const [];
@@ -120,10 +143,23 @@ class _ImpostorPlayScreenState extends ConsumerState<ImpostorPlayScreen> {
     _seenRole = false;
     _debateOver = false;
     _accused.clear();
+    _eliminated.clear();
+    _caughtImpostors.clear();
+    _lastAccused = null;
+    _votes = 0;
     _caught = false;
     _guessed = false;
     _roundPoints = List.filled(_players, 0);
   }
+
+  /// Fuera de juego esta ronda (eliminado o impostor ya atrapado).
+  bool _isOut(int player) =>
+      _eliminated.contains(player) || _caughtImpostors.contains(player);
+
+  int get _impostorsLeft => _impostors.length - _caughtImpostors.length;
+
+  int get _citizensLeft =>
+      _players - _impostors.length - _eliminated.length;
 
   // --- Reparto ---------------------------------------------------------------
 
@@ -156,7 +192,16 @@ class _ImpostorPlayScreenState extends ConsumerState<ImpostorPlayScreen> {
 
   // --- Debate ----------------------------------------------------------------
 
-  int get _target => (_asker + 1) % _players;
+  /// Siguiente jugador en la mesa que sigue en juego.
+  int _nextActive(int from) {
+    var i = from;
+    do {
+      i = (i + 1) % _players;
+    } while (_isOut(i) && i != from);
+    return i;
+  }
+
+  int get _target => _nextActive(_asker);
 
   void _nextTurn() => setState(() {
         _asker = _target;
@@ -195,41 +240,60 @@ class _ImpostorPlayScreenState extends ConsumerState<ImpostorPlayScreen> {
 
   // --- Votación --------------------------------------------------------------
 
+  /// Se acusa a una sola persona por votación: tocar a otra cambia la
+  /// acusación. Los que ya están fuera no se pueden acusar.
   void _toggleAccused(int player) {
+    if (_isOut(player)) return;
     setState(() {
       if (_accused.remove(player)) return;
-      if (_accused.length >= _setup.impostors) {
-        // Con 1 impostor, tocar a otro cambia la acusación.
-        if (_setup.impostors == 1) {
-          _accused.clear();
-        } else {
-          return;
-        }
-      }
-      _accused.add(player);
+      _accused
+        ..clear()
+        ..add(player);
     });
   }
 
   void _reveal() {
-    if (_accused.length != _setup.impostors) {
-      showGameMessage(
-        context,
-        _setup.impostors == 1
-            ? 'Elijan a una persona para acusar'
-            : 'Elijan a ${_setup.impostors} personas para acusar',
-      );
+    if (_accused.isEmpty) {
+      showGameMessage(context, 'Elijan a una persona para acusar');
       return;
     }
     _fx.both(GameSound.reveal, Haptic.heavy);
-    _caught = _accused.containsAll(_impostors);
-    for (final i in _accused) {
-      if (!_impostors.contains(i)) _falseAccusations[i]++;
-    }
-    if (_caught) {
-      setState(() => _phase = ImpostorPhase.lastChance);
+    final accused = _accused.single;
+    _accused.clear();
+    _votes++;
+    _lastAccused = accused;
+
+    if (_impostors.contains(accused)) {
+      _caughtImpostors.add(accused);
+      if (_impostorsLeft == 0) {
+        _caught = true;
+        setState(() => _phase = ImpostorPhase.lastChance);
+        return;
+      }
     } else {
-      _closeRound(guessed: false);
+      _eliminated.add(accused);
+      _falseAccusations[accused]++;
     }
+
+    // Quedan tantos impostores como ciudadanos: ya no se los puede ganar.
+    if (_impostorsLeft >= _citizensLeft) {
+      _caught = false;
+      _closeRound(guessed: false);
+      return;
+    }
+    setState(() => _phase = ImpostorPhase.voteResult);
+  }
+
+  /// Tras un voto que no cierra la ronda: nuevo debate con reloj nuevo,
+  /// empezando por el siguiente jugador que sigue en juego.
+  void _continueDebate() {
+    _fx.sound(GameSound.tap);
+    setState(() {
+      _debateOver = false;
+      if (_isOut(_asker)) _asker = _nextActive(_asker);
+      _questionsAsked[_asker]++;
+      _phase = ImpostorPhase.debate;
+    });
   }
 
   /// Reparte los puntos de la ronda y pasa al veredicto.
@@ -374,6 +438,13 @@ class _ImpostorPlayScreenState extends ConsumerState<ImpostorPlayScreen> {
             leadingIcon: Icons.gavel_rounded,
             onPressed: _reveal,
           ),
+        ImpostorPhase.voteResult => ChunkyButton(
+            key: const ValueKey('impostor-continue'),
+            label: 'Seguir debatiendo',
+            variant: ChunkyButtonVariant.sky,
+            leadingIcon: Icons.forum_rounded,
+            onPressed: _continueDebate,
+          ),
         ImpostorPhase.lastChance => null,
         ImpostorPhase.verdict => Row(
             children: [
@@ -406,13 +477,15 @@ class _ImpostorPlayScreenState extends ConsumerState<ImpostorPlayScreen> {
             ImpostorPhase.deal => 'Reparto secreto',
             ImpostorPhase.debate => 'Debate en vivo',
             ImpostorPhase.vote => 'Votación',
+            ImpostorPhase.voteResult => 'Resultado del voto',
             ImpostorPhase.lastChance => 'Última oportunidad',
             ImpostorPhase.verdict => 'Veredicto',
           },
           live: _phase == ImpostorPhase.debate,
           trailing: _phase == ImpostorPhase.debate
               ? CountdownBuilder(
-                  key: ValueKey('impostor-debate-$_round'),
+                  // Key nueva por debate (tras cada voto) = reloj desde cero.
+                  key: ValueKey('impostor-debate-$_round-$_votes'),
                   duration: Duration(minutes: _setup.debateMinutes),
                   running: timersEnabled,
                   onFinished: _onDebateFinished,
@@ -460,8 +533,19 @@ class _ImpostorPlayScreenState extends ConsumerState<ImpostorPlayScreen> {
               _SuspectsGrid(
                 names: _names,
                 accused: _accused,
-                needed: _setup.impostors,
+                eliminated: _eliminated,
+                caught: _caughtImpostors,
+                impostorsLeft: _impostorsLeft,
                 onToggle: _toggleAccused,
+              ),
+            ],
+          ImpostorPhase.voteResult => [
+              _VoteResultCard(
+                index: _lastAccused!,
+                name: _names[_lastAccused!],
+                wasImpostor: _impostors.contains(_lastAccused),
+                impostorsLeft: _impostorsLeft,
+                playersLeft: _citizensLeft + _impostorsLeft,
               ),
             ],
           ImpostorPhase.lastChance => [
@@ -1029,13 +1113,17 @@ class _SuspectsGrid extends StatelessWidget {
   const _SuspectsGrid({
     required this.names,
     required this.accused,
-    required this.needed,
+    required this.eliminated,
+    required this.caught,
+    required this.impostorsLeft,
     required this.onToggle,
   });
 
   final List<String> names;
   final Set<int> accused;
-  final int needed;
+  final Set<int> eliminated;
+  final Set<int> caught;
+  final int impostorsLeft;
   final ValueChanged<int> onToggle;
 
   @override
@@ -1048,6 +1136,11 @@ class _SuspectsGrid extends StatelessWidget {
             index: i,
             name: names[i],
             marked: accused.contains(i),
+            status: eliminated.contains(i)
+                ? 'Eliminado: era inocente'
+                : caught.contains(i)
+                    ? 'Atrapado: era impostor'
+                    : null,
             onTap: () => onToggle(i),
           )
         : const SizedBox.shrink();
@@ -1065,7 +1158,7 @@ class _SuspectsGrid extends StatelessWidget {
                   style: textTheme.headlineSmall,
                   overflow: TextOverflow.ellipsis),
             ),
-            Text('${accused.length}/$needed',
+            Text('${accused.length}/1',
                 key: const ValueKey('impostor-accused-count'),
                 style: AppTheme.tabular(textTheme.labelLarge!)
                     .copyWith(color: AppColors.secondary)),
@@ -1073,10 +1166,9 @@ class _SuspectsGrid extends StatelessWidget {
         ),
         const SizedBox(height: AppSpacing.xs),
         Text(
-          needed == 1
-              ? 'Discutan y voten en voz alta. Marquen a la persona más votada.'
-              : 'Discutan y voten en voz alta. Marquen a las $needed personas '
-                  'más votadas.',
+          'Discutan y voten en voz alta. Marquen a la persona más votada: si '
+          'es inocente, queda eliminada y siguen jugando.'
+          '${impostorsLeft > 1 ? ' Quedan $impostorsLeft impostores.' : ''}',
           style: textTheme.bodySmall,
         ),
         const SizedBox(height: AppSpacing.sm),
@@ -1104,6 +1196,7 @@ class _SuspectTile extends StatelessWidget {
     required this.name,
     required this.marked,
     required this.onTap,
+    this.status,
   });
 
   final int index;
@@ -1111,9 +1204,52 @@ class _SuspectTile extends StatelessWidget {
   final bool marked;
   final VoidCallback onTap;
 
+  /// Si no es `null`, el jugador ya está fuera de esta ronda: la tarjeta se
+  /// atenúa, muestra el motivo y no se puede acusar.
+  final String? status;
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+
+    if (status != null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Opacity(
+          opacity: 0.5,
+          child: Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: const BoxDecoration(
+              color: AppColors.surfaceContainer,
+              borderRadius: AppRadius.inner,
+            ),
+            child: Row(
+              children: [
+                _PlayerAvatar(index: index),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name,
+                          style: textTheme.labelMedium?.copyWith(
+                              decoration: TextDecoration.lineThrough),
+                          overflow: TextOverflow.ellipsis),
+                      Text(status!,
+                          style: textTheme.labelSmall
+                              ?.copyWith(color: AppColors.onSurfaceVariant),
+                          overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.block_rounded,
+                    size: 20, color: AppColors.outline),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -1179,6 +1315,59 @@ class _SuspectTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Resultado de un voto que no termina la ronda.
+class _VoteResultCard extends StatelessWidget {
+  const _VoteResultCard({
+    required this.index,
+    required this.name,
+    required this.wasImpostor,
+    required this.impostorsLeft,
+    required this.playersLeft,
+  });
+
+  final int index;
+  final String name;
+  final bool wasImpostor;
+  final int impostorsLeft;
+  final int playersLeft;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final left = impostorsLeft == 1
+        ? 'Aún queda 1 impostor'
+        : 'Aún quedan $impostorsLeft impostores';
+
+    return ChunkyCard(
+      color: wasImpostor ? AppColors.primaryFixed : AppColors.secondaryFixed,
+      child: Column(
+        children: [
+          _PlayerAvatar(index: index, size: 72),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            wasImpostor
+                ? '¡$name era impostor!'
+                : '$name era inocente',
+            key: const ValueKey('impostor-vote-result'),
+            textAlign: TextAlign.center,
+            style: textTheme.headlineMedium,
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            wasImpostor
+                ? '$left entre los $playersLeft que siguen. ¡No se confíen!'
+                : 'Queda eliminado de esta ronda. $left entre los '
+                    '$playersLeft que siguen: debatan otra vez y voten de '
+                    'nuevo.',
+            textAlign: TextAlign.center,
+            style: textTheme.bodyMedium,
+          ),
+        ],
       ),
     );
   }
